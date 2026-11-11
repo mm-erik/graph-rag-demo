@@ -8,7 +8,8 @@ build/
 node_modules/
 .cache/
 data/
-corpus/
+# Anchored: the generated PDFs at the repo root, never src/graph_rag/corpus/.
+/corpus/
 frontend/node_modules/
 frontend/dist/
 frontend/shots/

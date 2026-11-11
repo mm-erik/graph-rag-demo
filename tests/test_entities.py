@@ -439,3 +439,84 @@ def test_a_relation_joining_the_wrong_kinds_of_entity_is_dropped():
     renders, and the evidence under it does not support what it claims."""
     assert joins("arbeitet_fuer", "person", "organisation")
     assert not joins("arbeitet_fuer", "person", "ergebnis")
+
+
+# The machine half of the taxonomy. The failure it guards against was measured, not
+# imagined: before `baugruppe` and `verbaut_in` existed, a shared assembly was named in
+# two manufacturers' documents and had exactly one edge, so the traversal leg — which
+# walks edges, not mentions — reached one side of the bridge and asserted the other did
+# not exist. A taxonomy silently missing a relation looks identical to a corpus that
+# genuinely has no connection.
+
+
+def test_an_assembly_can_be_joined_to_the_machine_it_is_built_into():
+    assert joins("verbaut_in", "baugruppe", "maschine")
+
+
+def test_the_bridge_relation_refuses_endpoints_that_would_make_it_meaningless():
+    """`verbaut_in` is the edge a cross-manufacturer question traverses. Pointed at an
+    organisation or a person it would still render on the graph, as a claim the
+    evidence underneath it does not support."""
+    assert not joins("verbaut_in", "baugruppe", "organisation")
+    assert not joins("verbaut_in", "maschine", "baugruppe")  # direction is load-bearing
+    assert not joins("verbaut_in", "person", "maschine")
+
+
+def test_an_engineer_can_be_made_responsible_for_an_assembly():
+    """The second strand of each planted bridge is the person who carried the assembly
+    across. Rejecting this edge would leave the bridge hanging on one relation."""
+    assert joins("verantwortet", "person", "baugruppe")
+    assert joins("verantwortet", "person", "maschine")
+
+
+def test_the_machine_relations_join_only_what_they_name():
+    assert joins("variante_von", "maschine", "maschine")
+    assert joins("bietet_option", "maschine", "option")
+    assert joins("hergestellt_von", "maschine", "organisation")
+    assert not joins("bietet_option", "option", "maschine")
+    assert not joins("hergestellt_von", "organisation", "maschine")
+
+
+def test_two_models_sharing_a_code_under_different_machine_types_stay_distinct():
+    """`B2BC` names a Hagedorn mixer-dryer and a Pleickner assembly cell. One node for
+    both would merge two unrelated machines and make every spec answer ambiguous — and
+    only the folder tree knows the difference, since neither data sheet mentions the
+    other manufacturer."""
+    ambiguous = ambiguous_names([("Hagedorn", "B2BC"), ("Pleickner", "B2BC")])
+
+    hagedorn = identify("B2BC", "maschine", ["Hagedorn", "XTC27", "B2BC"], ambiguous)
+    pleickner = identify("B2BC", "maschine", ["Pleickner", "ZM3K", "B2BC"], ambiguous)
+
+    assert hagedorn != pleickner
+    assert (hagedorn.scope, pleickner.scope) == ("Hagedorn", "Pleickner")
+
+
+def test_an_assembly_shared_by_two_manufacturers_stays_one_identity():
+    """The mirror of the test above, and the reason the bridge exists: the same
+    assembly named under two branches must be *one* node, or there is nothing to
+    traverse between them."""
+    ambiguous = ambiguous_names([("Hagedorn", "B2BC"), ("Pleickner", "B2BC")])
+
+    origin = identify(
+        "Planetengetriebe HX-114", "baugruppe", ["Hagedorn", "XTC27", "B2BC"], ambiguous
+    )
+    reuse = identify(
+        "Planetengetriebe HX-114", "baugruppe", ["Ostmark", "QH4L", "P6V"], ambiguous
+    )
+
+    assert origin == reuse
+    assert origin.scope == ""
+
+
+def test_the_machine_documents_furniture_is_not_extractable():
+    """Every data sheet carries these words. One left in becomes a hub joining all
+    three manufacturers — and the real bridges here are four mentions wide, so a hub
+    does not merely add noise, it outranks them."""
+    for word in ("Baugruppe", "Wartungsplan", "Grundausführung", "Bestellschlüssel"):
+        assert identify(word, "baugruppe", ["Hagedorn", "XTC27", "B2BC"], frozenset()) is None
+
+    # ...while a code-bearing name of the same shape survives.
+    assert identify(
+        "Planetengetriebe HX-114", "baugruppe", ["Hagedorn", "XTC27", "B2BC"], frozenset()
+    ) is not None
+    assert identify("Option FW", "option", ["Hagedorn", "XTC27", "B2BC"], frozenset()) is not None

@@ -244,3 +244,41 @@ def test_the_branches_an_answer_drew_on_are_counted_from_the_context():
     )
 
     assert answer.branches == ["Brandt & Söhne", "Nordlicht Energie AG"]
+
+
+# The service's configured floor. `ANSWER_LEGS=traversal` is how a running application
+# is turned into the graph-only case, so the two directions below are the feature: a
+# bare question must take the configuration, and a question that names a knob must not.
+
+
+def test_a_bare_request_takes_the_services_configured_legs():
+    """A class-level default would silently overrule the configuration on every request
+    that omitted the field — the service would keep answering from all three legs while
+    reporting that it was graph-only."""
+    from graph_rag.api import TuningRequest
+    from graph_rag.config import AnswerSettings
+
+    configured = AnswerSettings(
+        legs="traversal", mode="hybrid", top_k=20, hops=2, max_chunks=12
+    )
+
+    parameters = TuningRequest().parameters(configured)
+
+    assert parameters.legs is Legs.TRAVERSAL
+    assert parameters.top_k == 20
+
+
+def test_a_request_that_names_a_leg_still_overrides_the_configuration():
+    """Isolation stays per question: the configuration moves the floor, it does not
+    take the comparison away."""
+    from graph_rag.api import TuningRequest
+    from graph_rag.config import AnswerSettings
+
+    configured = AnswerSettings(
+        legs="traversal", mode="hybrid", top_k=20, hops=2, max_chunks=12
+    )
+
+    parameters = TuningRequest(legs=Legs.SEARCH).parameters(configured)
+
+    assert parameters.legs is Legs.SEARCH
+    assert parameters.top_k == 20  # the knobs it did not name are untouched

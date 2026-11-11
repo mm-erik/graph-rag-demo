@@ -42,14 +42,13 @@ from pydantic import BaseModel, Field
 
 from graph_rag.ancestry import Ancestor, ancestry_lines
 from graph_rag.answer import (
-    DEFAULT_MAX_CHUNKS,
     Answer,
     ContextChunk,
     Legs,
     Parameters,
 )
 from graph_rag.cache import DiskCache
-from graph_rag.config import Settings
+from graph_rag.config import AnswerSettings, Settings
 from graph_rag.conversation import Conversation, Exchange, Rewrite
 from graph_rag.embedding import EmbeddingError
 from graph_rag.graph.entities import count_bridges, entity_coverage
@@ -57,7 +56,7 @@ from graph_rag.graph.health import graph_status
 from graph_rag.graph.levels import read_levels
 from graph_rag.graph.summaries import summary_coverage
 from graph_rag.pipeline import Pipeline, open_pipeline
-from graph_rag.retrieval import DEFAULT_TOP_K, Mode
+from graph_rag.retrieval import Mode
 from graph_rag.entities import EntityIdentity
 from graph_rag.subgraph import (
     NodeKind,
@@ -68,7 +67,6 @@ from graph_rag.subgraph import (
     entity_id,
     leg_balance,
 )
-from graph_rag.traversal import DEFAULT_HOPS
 
 # --- Request -----------------------------------------------------------------
 
@@ -81,19 +79,29 @@ class TuningRequest(BaseModel):
     client that sends only `hops` changes only that.
     """
 
-    legs: Legs = Legs.BOTH
-    mode: Mode = Mode.HYBRID
-    top_k: int = Field(default=DEFAULT_TOP_K, ge=1, le=100)
-    hops: int = Field(default=DEFAULT_HOPS, ge=0, le=5)
-    max_chunks: int = Field(default=DEFAULT_MAX_CHUNKS, ge=1, le=100)
+    legs: Legs | None = None
+    mode: Mode | None = None
+    top_k: int | None = Field(default=None, ge=1, le=100)
+    hops: int | None = Field(default=None, ge=0, le=5)
+    max_chunks: int | None = Field(default=None, ge=1, le=100)
 
-    def parameters(self) -> Parameters:
+    def parameters(self, defaults: AnswerSettings) -> Parameters:
+        """This request's knobs, each falling back to the service's configured floor.
+
+        `None` rather than a literal default per field, because the two are not the
+        same thing: a service started with `ANSWER_LEGS=traversal` must answer a bare
+        question from the graph alone, while still honouring a client that asks for
+        both legs on one question. A class-level default would silently overrule the
+        configuration on every request that omitted the field.
+        """
         return Parameters(
-            legs=self.legs,
-            mode=self.mode,
-            top_k=self.top_k,
-            hops=self.hops,
-            max_chunks=self.max_chunks,
+            legs=self.legs if self.legs is not None else Legs(defaults.legs),
+            mode=self.mode if self.mode is not None else Mode(defaults.mode),
+            top_k=self.top_k if self.top_k is not None else defaults.top_k,
+            hops=self.hops if self.hops is not None else defaults.hops,
+            max_chunks=(
+                self.max_chunks if self.max_chunks is not None else defaults.max_chunks
+            ),
         )
 
 
@@ -375,7 +383,7 @@ def create_app(settings: Settings) -> FastAPI:
             turn = pipeline.turn(
                 request.question,
                 request.conversation(),
-                request.tuning.parameters(),
+                request.tuning.parameters(settings.answer),
             )
             subgraph = build_subgraph(turn.answer, _mentions(pipeline, turn.answer))
         return _answer_payload(turn.answer, turn.rewrite, subgraph)

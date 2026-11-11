@@ -296,3 +296,27 @@ def test_a_second_run_refuses_to_write_over_the_machine_tree(tmp_path):
 
     generate_corpus(tmp_path, seed=7, force=True)
     assert machine_folder.is_dir()
+
+
+def test_the_bridge_paragraph_names_the_machine_the_assembly_sits_in():
+    """Extraction can only emit a relation whose *both* ends it reads in one chunk, and
+    the folder path is deliberately not a source of entities. Measured: while these
+    paragraphs named only the assembly and the engineer, the shared assembly ended up
+    with zero edges and `--legs traversal` reported the bridge did not exist."""
+    for anchor, assembly in (
+        (BRIDGE_ORIGIN, BRIDGE_ASSEMBLY),
+        (BRIDGE_REUSE, BRIDGE_ASSEMBLY),
+        (SECOND_BRIDGE_ORIGIN, SECOND_BRIDGE_ASSEMBLY),
+        (SECOND_BRIDGE_REUSE, SECOND_BRIDGE_ASSEMBLY),
+    ):
+        machine = machine_by(*anchor, SEED)
+        plan = maintenance_plan(machine, manufacturer_by_name(machine.manufacturer), SEED)
+        origin_section = next(
+            section
+            for section in plan.sections
+            if section.heading == "Konstruktive Herkunft der Baugruppen"
+        )
+        paragraph = origin_section.paragraphs[0]
+
+        assert assembly in paragraph
+        assert machine.order_key in paragraph  # both ends, one chunk

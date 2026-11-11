@@ -27,8 +27,16 @@ from dataclasses import dataclass, replace
 from typing import Protocol
 
 #: The fixed entity taxonomy, in German because every label on this screen is read by a
-#: German-speaking audience. One per concept in the spec's list: person, organisation,
-#: system or product, concept, metric or deliverable, risk.
+#: German-speaking audience. The first six are the consulting archive's concepts:
+#: person, organisation, system or product, concept, metric or deliverable, risk.
+#:
+#: The last three exist because the machine half of the corpus is *built* from opaque
+#: codes — `XTC27`, `B2BC`, `HX-114` — and the traversal leg walks edges, not mentions.
+#: Without a type for an assembly there is no relation that can carry one, so a shared
+#: assembly ends up named in two branches and traversable from neither: measured, the
+#: `HX-114` bridge had four mentions across two manufacturers and exactly one edge, and
+#: `--legs traversal` answered "ausschliesslich Ostmark" while the flat legs got it
+#: right. A taxonomy that cannot express the join is the whole reason the graph lost.
 ENTITY_TYPES: tuple[str, ...] = (
     "person",
     "organisation",
@@ -36,6 +44,9 @@ ENTITY_TYPES: tuple[str, ...] = (
     "konzept",
     "ergebnis",
     "risiko",
+    "maschine",
+    "baugruppe",
+    "option",
 )
 
 #: German letter folding. Applied before the accent strip below, so `ü` becomes `ue`
@@ -127,6 +138,37 @@ BOILERPLATE = frozenset(
         "workshop",
         "workshops",
         "projekt",
+        # The machine half's furniture. Every data sheet, variant overview and
+        # maintenance plan carries these words, so each one left in would become a hub
+        # joining all three manufacturers — the same failure the consulting terms above
+        # guard against, in a corpus where the real bridges are four mentions wide.
+        "wartungsplan",
+        "datenblatt",
+        "betriebsanleitung",
+        "maschinenbuch",
+        "ergaenzungsblaetter",
+        "aufstellplan",
+        "lieferprogramm",
+        "grundausfuehrung",
+        "ausfuehrung",
+        "ausfuehrungen",
+        "bestellschluessel",
+        "baugruppe",
+        "baugruppen",
+        "ersatzteil",
+        "ersatzteile",
+        "ersatzteilnummer",
+        "variante",
+        "varianten",
+        "baureihe",
+        "modell",
+        "maschine",
+        "option",
+        "optionen",
+        "pruefintervall",
+        "schutzart",
+        "leergewicht",
+        "gesamthoehe",
     }
 )
 
@@ -275,6 +317,12 @@ RELATION_TYPES: tuple[str, ...] = (
     "hat_risiko",
     "basiert_auf",
     "teil_von",
+    # The machine half. `verbaut_in` is the load-bearing one: it is the edge a question
+    # about a shared assembly traverses to reach the other manufacturer.
+    "verbaut_in",
+    "variante_von",
+    "bietet_option",
+    "hergestellt_von",
 )
 
 
@@ -293,7 +341,10 @@ RELATION_ENDPOINTS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "mitarbeit_in": (frozenset({"person"}), frozenset({"konzept"})),
     "verantwortet": (
         frozenset({"person"}),
-        frozenset({"ergebnis", "konzept", "risiko"}),
+        # Machines and assemblies included: the engineer who designed an assembly is
+        # the *second* strand of a bridge, and a constraint that rejected that edge
+        # would leave the bridge hanging on one relation.
+        frozenset({"ergebnis", "konzept", "risiko", "maschine", "baugruppe"}),
     ),
     "setzt_ein": (
         frozenset({"konzept", "organisation", "person"}),
@@ -309,6 +360,10 @@ RELATION_ENDPOINTS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         frozenset({"ergebnis", "konzept"}),
     ),
     "teil_von": (frozenset(ENTITY_TYPES), frozenset(ENTITY_TYPES)),
+    "verbaut_in": (frozenset({"baugruppe"}), frozenset({"maschine"})),
+    "variante_von": (frozenset({"maschine"}), frozenset({"maschine"})),
+    "bietet_option": (frozenset({"maschine"}), frozenset({"option"})),
+    "hergestellt_von": (frozenset({"maschine"}), frozenset({"organisation"})),
 }
 
 
@@ -554,6 +609,13 @@ EXTRACTION_SYSTEM_PROMPT = (
     "- konzept: Projekte, Vorhaben, Methoden, Verfahren\n"
     "- ergebnis: Arbeitsergebnisse, Dokumente, Konzepte, Kennzahlen, Meilensteine\n"
     "- risiko: benannte Risiken, Hindernisse, offene Punkte\n"
+    "- maschine: Maschinentypen, Modelle und bestellbare Varianten, fast immer "
+    "Buchstaben-Zahlen-Codes wie 'XTC27', 'B2BC', 'QH4L-P6V' oder "
+    "'XTC27-B2BC-FW/OW'\n"
+    "- baugruppe: Baugruppen, Bauteile und Ersatzteile mit eigener Bezeichnung, etwa "
+    "'Planetengetriebe HX-114' oder 'Spannsatz KN-30'\n"
+    "- option: bestellbare Ausstattungsoptionen mit Kurzzeichen, etwa 'Option FW' "
+    "oder 'Option OW'\n"
     "\n"
     "Erlaubte Beziehungstypen — nichts anderes ist zulässig:\n"
     "- arbeitet_fuer: Person -> Organisation\n"
@@ -565,6 +627,10 @@ EXTRACTION_SYSTEM_PROMPT = (
     "- hat_risiko: Projekt -> Risiko\n"
     "- basiert_auf: Ergebnis oder Konzept -> Ergebnis oder Konzept\n"
     "- teil_von: Zugehörigkeit zwischen zwei Entitäten\n"
+    "- verbaut_in: Baugruppe -> Maschine\n"
+    "- variante_von: Maschine -> Maschine (Variante oder Modell zu seiner Baureihe)\n"
+    "- bietet_option: Maschine -> Option\n"
+    "- hergestellt_von: Maschine -> Organisation\n"
     "\n"
     "Regeln:\n"
     "1. Nenne jede Entität mit ihrem Eigennamen, so wie er im Text steht, und immer "
@@ -582,6 +648,15 @@ EXTRACTION_SYSTEM_PROMPT = (
     "'Lenkungsausschuss', Begriffe wie 'Projekt', 'Maßnahmenliste', 'Statusbericht', "
     "'Risikoregister' oder 'Fachbereich' ohne eigenen Namen.\n"
     "6. Beide Enden einer Beziehung müssen in deiner Entitätenliste stehen.\n"
+    "7. Codes wie 'XTC27', 'B2BC' oder 'HX-114' sind Eigennamen und werden immer "
+    "extrahiert, auch wenn sie nichts bedeuten. Schreibe jeden Code Zeichen für "
+    "Zeichen so ab, wie er im Abschnitt steht — ergänze und entferne keinen "
+    "Buchstaben und keine Ziffer. Ein Bestellschlüssel wie 'XTC27-B2BC' oder "
+    "'QH4L-P6V' ist EINE Entität vom Typ maschine; zerlege ihn nicht in Baureihe "
+    "und Modell.\n"
+    "8. Nennt ein Abschnitt eine Baugruppe und die Maschine, in der sie sitzt, dann "
+    "gib dazu immer die Beziehung verbaut_in an — auch wenn die Baugruppe aus einem "
+    "früheren Einsatz übernommen wurde. Diese Kante ist der Zweck der Extraktion.\n"
     "\n"
     'Antworte ausschliesslich als JSON: {"entities": [{"name": "...", "type": "...", '
     '"evidence": "..."}], "relations": [{"from": "...", "type": "...", "to": "...", '

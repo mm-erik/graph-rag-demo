@@ -12,6 +12,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from graph_rag.answer import DEFAULT_MAX_CHUNKS, Legs
+from graph_rag.retrieval import DEFAULT_TOP_K, Mode
+from graph_rag.traversal import DEFAULT_HOPS
+
 
 @dataclass(frozen=True)
 class MistralSettings:
@@ -163,6 +167,24 @@ class ServiceSettings:
 
 
 @dataclass(frozen=True)
+class AnswerSettings:
+    """What the service answers with when a client sends only a question.
+
+    These are the same knobs `just query` exposes, lifted to configuration because the
+    demo's whole argument is made by changing them: serving the UI with `legs=traversal`
+    turns the running application into the graph-only case without touching the client.
+    A request that names a knob still wins — isolation stays per question, this only
+    moves the floor.
+    """
+
+    legs: str
+    mode: str
+    top_k: int
+    hops: int
+    max_chunks: int
+
+
+@dataclass(frozen=True)
 class CacheSettings:
     """Where the ingestion cache lives.
 
@@ -185,6 +207,7 @@ class Settings:
     entities: EntitySettings
     traversal: TraversalSettings
     service: ServiceSettings
+    answer: AnswerSettings
     cache: CacheSettings
 
 
@@ -294,6 +317,15 @@ def load_settings() -> Settings:
         traversal=TraversalSettings(
             match_threshold=_similarity_env("TRAVERSAL_MATCH_THRESHOLD", 0.905),
             candidates=_positive_env("TRAVERSAL_CANDIDATES", 5),
+        ),
+        # Unset, the service answers exactly as `just query` does — the defaults are
+        # imported rather than repeated, so the CLI and the UI cannot drift apart.
+        answer=AnswerSettings(
+            legs=os.getenv("ANSWER_LEGS", Legs.BOTH.value),
+            mode=os.getenv("ANSWER_MODE", Mode.HYBRID.value),
+            top_k=_positive_env("ANSWER_TOP_K", DEFAULT_TOP_K),
+            hops=_int_env("ANSWER_HOPS", DEFAULT_HOPS),
+            max_chunks=_positive_env("ANSWER_MAX_CHUNKS", DEFAULT_MAX_CHUNKS),
         ),
         service=ServiceSettings(
             host=os.getenv("API_HOST", "127.0.0.1"),
