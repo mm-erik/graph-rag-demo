@@ -53,6 +53,7 @@ from graph_rag.conversation import (
     Rewrite,
     Turn,
 )
+from graph_rag.clarification import Clarification
 from graph_rag.corpus.generate import CorpusExists, generate_corpus
 from graph_rag.embedding import EmbeddingError
 from graph_rag.entities import (
@@ -1703,6 +1704,13 @@ def query(
         ),
     ] = None,
     preview: Annotated[int, typer.Option(help="Characters of chunk text shown")] = 60,
+    no_clarify: Annotated[
+        bool,
+        typer.Option(
+            "--no-clarify",
+            help="Answer even when the question names something the corpus cannot resolve",
+        ),
+    ] = False,
 ) -> None:
     """Answer a question from both retrieval legs, with its sources and its path.
 
@@ -1729,10 +1737,34 @@ def query(
         legs=legs, mode=mode, top_k=top_k, hops=hops, max_chunks=max_chunks
     )
     with _answering(settings, cache, question, threshold) as pipeline:
+        clarification = None if no_clarify else pipeline.clarify(question)
+        if clarification is not None:
+            _print_clarification(clarification)
+            return
         answer = _ask(pipeline, question, parameters)
 
     _print_query(answer, preview)
     _print_cache(cache)
+
+
+def _print_clarification(clarification: Clarification) -> None:
+    """The question put back, with what the corpus actually holds.
+
+    Printed instead of an answer, not alongside one: the point is that the question
+    cannot be answered as asked, and printing a guess underneath would undo that.
+    `--no-clarify` is there for the operator who wants to see the guess anyway.
+    """
+    console.print(f"[bold yellow]{clarification.question}[/bold yellow]")
+    table = Table(box=None, pad_edge=False)
+    table.add_column(clarification.choices[0].level or "Treffer", style="bold")
+    table.add_column("Ablage")
+    for choice in clarification.choices:
+        table.add_row(choice.name, choice.context)
+    console.print(table)
+    console.print(
+        "[dim]Die Frage mit einem dieser Namen erneut stellen — oder mit "
+        "`--no-clarify` trotzdem antworten lassen.[/dim]"
+    )
 
 
 @contextmanager

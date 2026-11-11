@@ -29,11 +29,13 @@ from neo4j import Driver
 
 from graph_rag.answer import DEFAULT_PARAMETERS, Answer, Parameters, answer_question
 from graph_rag.cache import CachingChatModel, CachingEmbeddingModel, DiskCache, embedding_signature
+from graph_rag.clarification import Clarification, Folder, clarify
 from graph_rag.chat import make_chat_model, make_extraction_model
 from graph_rag.config import Settings
 from graph_rag.conversation import Conversation, Rewrite, Turn, rewrite_question
 from graph_rag.embedding import make_embedding_model
 from graph_rag.graph.driver import graph_driver
+from graph_rag.graph.hierarchy import read_folder_index
 from graph_rag.graph.retrieval import GraphChunkIndex
 from graph_rag.graph.traversal import GraphEntityGraph
 from graph_rag.retrieval import ChunkIndex, Embedder
@@ -98,6 +100,16 @@ class Pipeline:
     #: here from the per-call override or the environment, so neither front end has to
     #: remember which of the two it is holding.
     threshold: float
+    #: The corpus's folder tree, read once when the pipeline opens. The clarifier needs
+    #: it on every question and it changes only on ingest, so re-reading it per question
+    #: would add a round trip to the one check that must stay free.
+    folders: tuple[Folder, ...] = ()
+
+    def clarify(self, question: str) -> Clarification | None:
+        """The question to put back, when this one names a folder the corpus cannot
+        resolve. None when it resolves — which is the common case, and costs no model
+        call and no query."""
+        return clarify(question, self.folders)
 
     def ask(self, question: str, parameters: Parameters = DEFAULT_PARAMETERS) -> Answer:
         """One standalone question, answered from both legs."""
@@ -160,4 +172,5 @@ def open_pipeline(
             threshold=(
                 settings.traversal.match_threshold if threshold is None else threshold
             ),
+            folders=tuple(read_folder_index(driver, settings.neo4j.database)),
         )

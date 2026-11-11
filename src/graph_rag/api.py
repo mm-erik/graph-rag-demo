@@ -48,6 +48,7 @@ from graph_rag.answer import (
     Parameters,
 )
 from graph_rag.cache import DiskCache
+from graph_rag.clarification import Clarification
 from graph_rag.config import AnswerSettings, Settings
 from graph_rag.conversation import Conversation, Exchange, Rewrite
 from graph_rag.embedding import EmbeddingError
@@ -342,6 +343,29 @@ def pipeline_of(request: Request) -> Pipeline:
 PipelineDep = Annotated[Pipeline, Depends(pipeline_of)]
 
 
+def _clarification_payload(clarification: Clarification | None) -> dict[str, Any] | None:
+    """What the corpus could not resolve, alongside the answer rather than instead of
+    it: an HTTP client that ignores this field keeps working exactly as before, and one
+    that renders it can put the choice in front of the user before they read a reply
+    about the wrong machine."""
+    if clarification is None:
+        return None
+    return {
+        "kind": clarification.kind,
+        "named": clarification.named,
+        "question": clarification.question,
+        "choices": [
+            {
+                "name": choice.name,
+                "path": choice.path,
+                "context": choice.context,
+                "level": choice.level,
+            }
+            for choice in clarification.choices
+        ],
+    }
+
+
 def create_app(settings: Settings) -> FastAPI:
     """The service over one set of settings, opening its own pipeline when it starts."""
 
@@ -385,8 +409,13 @@ def create_app(settings: Settings) -> FastAPI:
                 request.conversation(),
                 request.tuning.parameters(settings.answer),
             )
+            # Against the *resolved* question: a follow-up like "und das B2BC?" only
+            # names the ambiguous code once the rewrite has put it back together.
+            clarification = pipeline.clarify(turn.rewrite.standalone)
             subgraph = build_subgraph(turn.answer, _mentions(pipeline, turn.answer))
-        return _answer_payload(turn.answer, turn.rewrite, subgraph)
+        payload = _answer_payload(turn.answer, turn.rewrite, subgraph)
+        payload["clarification"] = _clarification_payload(clarification)
+        return payload
 
     @app.get("/api/status")
     def status(pipeline: PipelineDep) -> dict[str, Any]:

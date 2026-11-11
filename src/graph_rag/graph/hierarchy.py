@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass
 
 from neo4j import Driver, ManagedTransaction
 
+from graph_rag.clarification import Folder
 from graph_rag.hierarchy import Hierarchy
 
 _MERGE_FOLDERS = """
@@ -122,3 +123,48 @@ def write_hierarchy(
 
     with driver.session(database=database) as session:
         return session.execute_write(write)
+
+
+# Every folder with its parent, its children and its depth — the whole shape of the
+# corpus in one round trip. Small enough to read once and hold: a corpus of a hundred
+# thousand documents still has a folder tree an operator could print.
+_READ_FOLDER_INDEX = """
+MATCH (f:Folder) WHERE f.depth > 0
+OPTIONAL MATCH (f)-[:CONTAINS]->(child:Folder)
+RETURN f.name AS name, f.path AS path, f.depth AS depth,
+       f.inferred_level_name AS level,
+       [c IN collect(child.name) WHERE c IS NOT NULL] AS children
+ORDER BY f.path
+"""
+
+
+def read_folder_index(driver: Driver, database: str) -> list[Folder]:
+    """The corpus's folder tree, shaped for the clarifier.
+
+    Ancestry is derived from the stored path rather than walked with a second query:
+    `CONTAINS` already made the path authoritative when the hierarchy was written, and
+    a variable-length match per folder would cost one traversal each to rediscover
+    what the string already says.
+    """
+    records, _, _ = driver.execute_query(_READ_FOLDER_INDEX, database_=database)
+    by_path = {record["path"]: record for record in records}
+    folders = []
+    for record in records:
+        parts = record["path"].split("/")
+        ancestry = []
+        for index in range(len(parts)):
+            candidate = "/".join(parts[: index + 1])
+            found = by_path.get(candidate)
+            if found is not None:
+                ancestry.append(found["name"])
+        folders.append(
+            Folder(
+                name=record["name"],
+                path=record["path"],
+                depth=record["depth"],
+                ancestry=tuple(ancestry),
+                children=tuple(sorted(record["children"])),
+                level=record["level"],
+            )
+        )
+    return folders
